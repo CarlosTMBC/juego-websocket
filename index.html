@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Botón Online</title>
+  <style>
+    body { text-align: center; font-family: sans-serif; margin-top: 100px; }
+    button {
+      font-size: 30px;
+      padding: 20px 40px;
+      border: none;
+      border-radius: 10px;
+      background-color: #1976d2;
+      color: white;
+      cursor: pointer;
+    }
+    button.clicked {
+      background-color: #d32f2f;
+    }
+  </style>
+</head>
+<body>
+  <h1>Botón Sincronizado</h1>
+  <button id="syncButton">¡Clic!</button>
+
+  <script>
+    const socket = new WebSocket("wss://TU_APP_RENDER.onrender.com");
+    const btn = document.getElementById('syncButton');
+
+    btn.addEventListener('click', () => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send("CLICK");
+        aplicarCambio();
+      }
+    });
+
+    socket.onmessage = (event) => {
+      if (event.data === "CLICK") aplicarCambio();
+    };
+
+    socket.onerror = e => console.error("❌ Error:", e);
+    socket.onclose = () => console.log("🔌 Desconectado del servidor");
+
+    function aplicarCambio() {
+      btn.classList.add('clicked');
+      btn.innerText = "¡Presionado!";
+      setTimeout(() => {
+        btn.classList.remove('clicked');
+        btn.innerText = "¡Clic!";
+      }, 1500);
+    }
+  </script>
+</body>
+</html>
