@@ -3,16 +3,15 @@ import websockets
 import os
 import json
 
-clients = []
-state = [""] * 9
-turn = "X"
-game_over = False
+# Un diccionario donde cada clave es el nombre/ID de la sala
+# y el valor es el estado de esa sala
+salas = {}
 
-def check_winner():
+def check_winner(state):
     lines = [
-        (0,1,2), (3,4,5), (6,7,8), # filas
-        (0,3,6), (1,4,7), (2,5,8), # columnas
-        (0,4,8), (2,4,6)           # diagonales
+        (0,1,2), (3,4,5), (6,7,8),
+        (0,3,6), (1,4,7), (2,5,8),
+        (0,4,8), (2,4,6)
     ]
     for a,b,c in lines:
         if state[a] and state[a] == state[b] == state[c]:
@@ -21,50 +20,84 @@ def check_winner():
         return "Empate"
     return None
 
-async def notify_all(message):
-    for client in clients:
-        await client["ws"].send(json.dumps(message))
-
 async def handler(ws):
-    global turn, state, game_over
-
-    if len(clients) >= 2:
-        await ws.send(json.dumps({ "type": "full" }))
-        return
-
-    symbol = "X" if not clients else "O"
-    client = { "ws": ws, "symbol": symbol }
-    clients.append(client)
-
-    await ws.send(json.dumps({ "type": "init", "symbol": symbol }))
-    await notify_all({ "type": "state", "state": state, "turn": turn })
-
+    room = None
+    symbol = None
     try:
         async for message in ws:
             data = json.loads(message)
-            if data["type"] == "move" and not game_over:
+
+            # 1. JOIN ROOM
+            if data.get("type") == "join":
+                room = data.get("room")
+                if not room:
+                    await ws.send(json.dumps({ "type": "error", "msg": "Sin sala" }))
+                    return
+                if room not in salas:
+                    salas[room] = {
+                        "clients": [],
+                        "state": [""] * 9,
+                        "turn": "X",
+                        "game_over": False
+                    }
+                sala = salas[room]
+                if len(sala["clients"]) >= 2:
+                    await ws.send(json.dumps({ "type": "full" }))
+                    return
+                symbol = "X" if not sala["clients"] else "O"
+                sala["clients"].append({"ws": ws, "symbol": symbol})
+                await ws.send(json.dumps({ "type": "init", "symbol": symbol }))
+                # Estado inicial para todos los jugadores de la sala
+                for c in sala["clients"]:
+                    await c["ws"].send(json.dumps({
+                        "type": "state",
+                        "state": sala["state"],
+                        "turn": sala["turn"]
+                    }))
+                continue
+
+            # 2. SOLO SI YA ESTÁ EN UNA SALA
+            if not room or room not in salas:
+                await ws.send(json.dumps({ "type": "error", "msg": "No unido a una sala" }))
+                continue
+            sala = salas[room]
+
+            # 3. MOVIMIENTO
+            if data.get("type") == "move" and not sala["game_over"]:
                 idx = data["index"]
-                if state[idx] == "" and turn == client["symbol"]:
-                    state[idx] = client["symbol"]
-                    winner = check_winner()
+                if sala["state"][idx] == "" and sala["turn"] == symbol:
+                    sala["state"][idx] = symbol
+                    winner = check_winner(sala["state"])
                     if winner == "Empate":
-                        await notify_all({ "type": "end", "state": state, "winner": None })
-                        game_over = True
+                        for c in sala["clients"]:
+                            await c["ws"].send(json.dumps({
+                                "type": "end", "state": sala["state"], "winner": None
+                            }))
+                        sala["game_over"] = True
                     elif winner:
-                        await notify_all({ "type": "end", "state": state, "winner": winner })
-                        game_over = True
+                        for c in sala["clients"]:
+                            await c["ws"].send(json.dumps({
+                                "type": "end", "state": sala["state"], "winner": winner
+                            }))
+                        sala["game_over"] = True
                     else:
-                        turn = "O" if turn == "X" else "X"
-                        await notify_all({ "type": "state", "state": state, "turn": turn })
+                        sala["turn"] = "O" if sala["turn"] == "X" else "X"
+                        for c in sala["clients"]:
+                            await c["ws"].send(json.dumps({
+                                "type": "state",
+                                "state": sala["state"],
+                                "turn": sala["turn"]
+                            }))
+
     except:
         pass
     finally:
-        clients.remove(client)
-        if len(clients) < 2:
-            # Reset juego si un jugador se desconecta
-            state = [""] * 9
-            turn = "X"
-            game_over = False
+        # Al desconectarse, quitar jugador de la sala y resetear si es necesario
+        if room and room in salas:
+            sala = salas[room]
+            sala["clients"] = [c for c in sala["clients"] if c["ws"] != ws]
+            if not sala["clients"]:
+                del salas[room]  # borra sala si se va el último
 
 port = int(os.environ.get("PORT", 10000))
 start_server = websockets.serve(handler, "0.0.0.0", port)
